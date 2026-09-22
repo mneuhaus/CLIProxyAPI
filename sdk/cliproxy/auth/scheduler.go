@@ -59,6 +59,9 @@ type providerScheduler struct {
 	modelShards map[string]*modelScheduler
 }
 
+// claudeSchedulingProvider is the canonical scheduling key for Anthropic credentials.
+const claudeSchedulingProvider = "claude"
+
 // scheduledAuthMeta stores the immutable scheduling fields derived from an auth snapshot.
 type scheduledAuthMeta struct {
 	auth              *Auth
@@ -1189,8 +1192,15 @@ func (m *scheduledAuthMeta) supportsModel(modelKey string) bool {
 	if len(m.supportedModelSet) == 0 {
 		return false
 	}
-	_, ok := m.supportedModelSet[modelKey]
-	return ok
+	if _, ok := m.supportedModelSet[modelKey]; ok {
+		return true
+	}
+	// supportedModelSet is an enumerated snapshot of the registry, so a model
+	// the catalog has not caught up with can never appear in it. Mirror the
+	// passthrough the registry allows for Anthropic models here, otherwise the
+	// scheduler fast path rejects what the legacy path would accept.
+	return registry.IsClaudePassthroughModel(modelKey) &&
+		canonicalSchedulingProvider(m.providerKey) == claudeSchedulingProvider
 }
 
 // upsertEntryLocked updates or inserts one auth entry and rebuilds indexes when ordering changes.
