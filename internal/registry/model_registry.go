@@ -1465,7 +1465,12 @@ func (r *ModelRegistry) ClientSupportsModel(clientID, modelID string) bool {
 		}
 	}
 
-	return false
+	// Mirror the passthrough allowed in GetModelProviders: a Claude credential
+	// may serve an Anthropic model that the catalog has not registered yet.
+	// Without this, routing resolves the provider but auth selection rejects
+	// every candidate.
+	return IsClaudePassthroughModel(modelID) &&
+		strings.EqualFold(strings.TrimSpace(r.clientProviders[clientID]), claudeProviderKey)
 }
 
 // IsModelSuspendedForClient reports whether a model is currently suspended for a specific client.
@@ -1896,6 +1901,11 @@ func (r *ModelRegistry) GetModelProviders(modelID string) []string {
 
 	registration, exists := r.models[modelID]
 	if !exists || registration == nil || len(registration.Providers) == 0 {
+		// An Anthropic model the catalog has not caught up with yet is still
+		// routable as long as a Claude credential is registered.
+		if IsClaudePassthroughModel(modelID) && r.hasProviderClientLocked(claudeProviderKey) {
+			return []string{claudeProviderKey}
+		}
 		return nil
 	}
 
