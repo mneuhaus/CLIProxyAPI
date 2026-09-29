@@ -113,13 +113,34 @@ func tryStartupRefresh(ctx context.Context) {
 	tryRefreshModels(ctx, "startup model refresh")
 }
 
+// refreshMu serializes catalog refreshes so an on-demand refresh cannot race the periodic one.
+var refreshMu sync.Mutex
+
+// RefreshModelsNow fetches the remote model catalog immediately instead of waiting for the
+// next periodic tick, and re-registers models for every provider whose definitions changed.
+// It returns the source URL and the changed providers, or an error if every URL failed.
+func RefreshModelsNow(ctx context.Context) (string, []string, error) {
+	url, changed, ok := refreshModels(ctx, "on-demand model refresh")
+	if !ok {
+		return "", nil, fmt.Errorf("model catalog fetch failed from all URLs")
+	}
+	return url, changed, nil
+}
+
 func tryRefreshModels(ctx context.Context, label string) {
+	refreshModels(ctx, label)
+}
+
+func refreshModels(ctx context.Context, label string) (string, []string, bool) {
+	refreshMu.Lock()
+	defer refreshMu.Unlock()
+
 	oldData := getModels()
 
 	parsed, url := fetchModelsFromRemote(ctx)
 	if parsed == nil {
 		log.Warnf("%s: fetch failed from all URLs, keeping current data", label)
-		return
+		return "", nil, false
 	}
 
 	if len(parsed.Meta) == 0 && oldData != nil && len(oldData.Meta) > 0 {
@@ -136,11 +157,12 @@ func tryRefreshModels(ctx context.Context, label string) {
 
 	if len(changed) == 0 {
 		log.Infof("%s completed from %s, no changes detected", label, url)
-		return
+		return url, nil, true
 	}
 
 	log.Infof("%s completed from %s, changes detected for providers: %v", label, url, changed)
 	notifyModelRefresh(changed)
+	return url, changed, true
 }
 
 // fetchModelsFromRemote tries all remote URLs and returns the parsed model catalog

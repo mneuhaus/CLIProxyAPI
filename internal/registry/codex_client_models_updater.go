@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -44,23 +45,34 @@ func runCodexClientModelsUpdater(ctx context.Context) {
 	}
 }
 
+// RefreshCodexClientModelsNow fetches the Codex client model catalog immediately instead of
+// waiting for the next periodic tick. It reports the source URL and whether the catalog changed.
+func RefreshCodexClientModelsNow(ctx context.Context) (string, bool, error) {
+	return refreshCodexClientModels(ctx, "on-demand Codex client model refresh")
+}
+
 func tryRefreshCodexClientModels(ctx context.Context, label string) {
+	_, _, _ = refreshCodexClientModels(ctx, label)
+}
+
+func refreshCodexClientModels(ctx context.Context, label string) (string, bool, error) {
 	data, sourceURL := fetchCodexClientModelsFromRemote(ctx)
 	if data == nil {
 		log.Warnf("%s: fetch failed from all URLs, keeping current data", label)
-		return
+		return "", false, fmt.Errorf("codex client model catalog fetch failed from all URLs")
 	}
 
 	changed, err := loadCodexClientModelsFromBytes(data, sourceURL)
 	if err != nil {
 		log.Warnf("%s: fetched catalog rejected, keeping current data: %v", label, err)
-		return
+		return sourceURL, false, fmt.Errorf("codex client model catalog rejected: %w", err)
 	}
 	if !changed {
 		log.Infof("%s completed from %s, no changes detected", label, sourceURL)
-		return
+		return sourceURL, false, nil
 	}
 	log.Infof("%s completed from %s, catalog updated", label, sourceURL)
+	return sourceURL, true, nil
 }
 
 func fetchCodexClientModelsFromRemote(ctx context.Context) ([]byte, string) {
